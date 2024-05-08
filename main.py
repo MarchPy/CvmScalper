@@ -8,25 +8,40 @@ from zipfile import ZipFile
 
 class CVM:
     def __init__(self):
-        self.__url = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/ITR/DADOS/"
+        self.__url = "https://dados.cvm.gov.br/dados/cia_aberta/doc/itr/dados/"
         self.__start_year = 2023
         self.__end_year = 2024
         self.__tmp_path = os.path.join(os.path.dirname(p=__file__), '.tmp/')
-        self.__database = os.path.join(os.path.dirname(p=__file__), 'data/')
+        self.__database_path = os.path.join(os.path.dirname(p=__file__), 'data/')
+        self.__colect_data()
 
-    def colect_data(self):
-        try:
-            os.mkdir(path=self.__tmp_path)
-        except FileExistsError:
-            pass
-        
-        for year in range(self.__start_year, self.__end_year + 1):
-            filename = f"itr_cia_aberta_{year}.zip"
-            url = self.__url + filename
-            out = os.path.join(self.__tmp_path, filename)
-            wget.download(url=url, out=out)
+    def __colect_data(self):
+        def download_data():
+            try:
+                os.mkdir(path=self.__tmp_path)
+            except FileExistsError:
+                pass
+            
+            for year in range(self.__start_year, self.__end_year + 1):
+                filename = f"itr_cia_aberta_{year}.zip"
+                url = self.__url + filename
+                out = os.path.join(self.__tmp_path, filename)
+                wget.download(url=url, out=out)
 
-    def transform_data(self):
+            df = self.__transform_data()
+            self.__database(df=df)
+
+        if not os.path.exists(path=os.path.join(self.__database_path, 'cvm.db')):
+            download_data()
+        else:
+            response = input("Banco de dados encontrado. Deseja atualizar? >>> ").lower()
+            if "y" in response or "yes" in response:
+                download_data()
+
+            else:
+                pass
+
+    def __transform_data(self):
         # Extraindo e removendo os arquivos .zip
         for file in os.listdir(path=self.__tmp_path):
             filepath = os.path.join(self.__tmp_path, file)
@@ -56,14 +71,14 @@ class CVM:
         print(len(df))
         return df
 
-    def database(self, df: pd.DataFrame):
+    def __database(self, df: pd.DataFrame):
         try:
-            os.mkdir(path=self.__database)
+            os.mkdir(path=self.__database_path)
         
         except FileExistsError:
             pass
 
-        with sqlite3.connect(database=os.path.join(self.__database, 'cvm.db')) as conn:
+        with sqlite3.connect(database=os.path.join(self.__database_path, 'cvm.db')) as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS dados_cvm (
@@ -71,11 +86,16 @@ class CVM:
             );
             """)
             
-            for index, row in df.iterrows():
-                cursor.execute(f"INSERT INTO dados_cvm VALUES ({', '.join(['?' for _ in df.columns])})", tuple(row))
-
+            for _, row in df.iterrows():
+                cursor.execute("SELECT * FROM dados_cvm WHERE CD_CVM = ? AND VERSAO = ? AND DS_CONTA = ? AND VL_CONTA = ?",
+                            (row['CD_CVM'], row['VERSAO'], row['DS_CONTA'], row['VL_CONTA']))
+                
+                if not cursor.fetchall():
+                    placeholders = ', '.join(['?' for _ in range(len(df.columns))])
+                    cursor.execute(f"INSERT INTO dados_cvm VALUES ({placeholders})", tuple(row))
+                
     def fetch_data(self, cd_cvm: str):
-        with sqlite3.connect(database=os.path.join(self.__database, 'cvm.db'))as conn:
+        with sqlite3.connect(database=os.path.join(self.__database_path, 'cvm.db'))as conn:
             df_from_database = pd.read_sql_query(sql="SELECT * FROM dados_cvm", con=conn)
 
         df_from_database[['DENOM_CIA', 'CD_CVM']].drop_duplicates(subset='CD_CVM').to_excel("empresas.xlsx", index=False)
@@ -100,11 +120,6 @@ class CVM:
                         
         df_empresa.to_excel(f"{nome.replace('/', '').replace('.', '')}.xlsx")
         
-            
-
 
 app = CVM()
-app.colect_data()
-df = app.transform_data()
-app.database(df=df)
-app.fetch_data(cd_cvm=input("Digita o código CVM >>> "))
+app.fetch_data(cd_cvm=input("Digite o código CVM >>> "))
